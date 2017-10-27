@@ -47,7 +47,7 @@ select database_role into db_role from v$database;
 select instance_number into db_inst from v$instance;
 select count(*) into L0 from v$backup_set where Incremental_level=0 and completion_time > sysdate - 8;
 select count(*) into L1 from v$backup_set where Incremental_level=1 and completion_time > sysdate - 2;
-select count(*) into ARC_BACKUP from v$backup_set where incremental_level is null and backup_type='L' and completion_time > sysdate-8/24;
+select count(*) into ARC_BACKUP from v$backup_set where incremental_level is null and backup_type='L' and completion_time > sysdate-1;
 /*CHECK OS WIN server does not have archive log backup only archive log copy 
 Replaced the WIN to Windows to accomodate the Query for OS check
 */
@@ -82,8 +82,8 @@ if db_rolec=1 or db_instc=0 or ARCHIVE_LOG_MODE='NOARCHIVELOG' or OS_TYPE= 'WIN'
  OUTPUT_MESSAGE := 'NO';
 else
 /* Dynamic sql are to avoid getting error on node B standby. Dynamic SQL output will captured by variables using execute immediate. */
- L00_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 7 and b.incremental_level = 0';
- L11_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 1 and b.incremental_level = 1';
+ L00_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 8 and b.incremental_level = 0';
+ L11_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 2 and b.incremental_level = 1';
  L001_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 1 and b.incremental_level = 0';
  EXECUTE IMMEDIATE L00_stmt into L00;
  EXECUTE IMMEDIATE L11_stmt into L11;
