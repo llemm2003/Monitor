@@ -85,6 +85,14 @@ else
  L00_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 8 and b.incremental_level = 0';
  L11_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 2 and b.incremental_level = 1';
  L001_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 1 and b.incremental_level = 0';
+ /* SQL will be replaced by this in the future
+ select distinct a.session_stamp,a.status from V$RMAN_BACKUP_JOB_DETAILS a join 
+v$backup_set_details b
+on a.session_stamp=b.session_stamp
+where
+a.start_time > sysdate - 20  and
+b.incremental_level=0
+*/
  EXECUTE IMMEDIATE L00_stmt into L00;
  EXECUTE IMMEDIATE L11_stmt into L11;
  EXECUTE IMMEDIATE L001_stmt into L001;
