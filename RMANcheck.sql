@@ -1,9 +1,10 @@
 set serveroutput on
 /* Script for updated rman monitoring. This script will output "No Backup FAILURE" once the script sees the backups are within threshold limit
 Threshold:
-Level 0 - 7 Days
-Level 1 - 1 Day
+Level 0 - 7 Days + Grace period
+Level 1 - 1 Day + Grace period
 Archivelog - 8 hours
+Grace-period - 12 hours
 No Backup Failure will also happen if the database is second node, No archived log, Dataguard or on a windows.
 */
 /* Variable declarations */
@@ -47,7 +48,7 @@ select database_role into db_role from v$database;
 select instance_number into db_inst from v$instance;
 select count(*) into L0 from v$backup_set where Incremental_level=0 and completion_time > sysdate - 8;
 select count(*) into L1 from v$backup_set where Incremental_level=1 and completion_time > sysdate - 2;
-select count(*) into ARC_BACKUP from v$backup_set where incremental_level is null and backup_type='L' and completion_time > sysdate-1;
+select count(*) into ARC_BACKUP from v$backup_set where incremental_level is null and backup_type='L' and completion_time > sysdate-8/24;
 /*CHECK OS WIN server does not have archive log backup only archive log copy 
 Replaced the WIN to Windows to accomodate the Query for OS check
 */
@@ -82,10 +83,10 @@ if db_rolec=1 or db_instc=0 or ARCHIVE_LOG_MODE='NOARCHIVELOG' or OS_TYPE= 'WIN'
  OUTPUT_MESSAGE := 'NO';
 else
 /* Dynamic sql are to avoid getting error on node B standby. Dynamic SQL output will captured by variables using execute immediate. */
- L00_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 8 and b.incremental_level = 0';
- L11_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 2 and b.incremental_level = 1';
- L001_stmt := 'select /*+ rule */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 1 and b.incremental_level = 0';
- /* SQL will be replaced by this in the future
+ L00_stmt := 'select /*+ ALL_ROWS */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 180/24 and b.incremental_level = 0';
+ L11_stmt := 'select /*+ ALL_ROWS */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 36/24 and b.incremental_level = 1';
+ L001_stmt := 'select /*+ ALL_ROWS */ NVL(min(r.status),''NO BACKUP'') from V$RMAN_BACKUP_JOB_DETAILS r inner join (select distinct session_stamp, incremental_level from v$backup_set_details) b on r.session_stamp = b.session_stamp where incremental_level is not null and r.start_time > sysdate - 1 and b.incremental_level = 0';
+  /* SQL will be replaced by this in the future
  select distinct a.session_stamp,a.status from V$RMAN_BACKUP_JOB_DETAILS a join 
 v$backup_set_details b
 on a.session_stamp=b.session_stamp
@@ -98,8 +99,8 @@ b.incremental_level=0
  EXECUTE IMMEDIATE L001_stmt into L001;
  /* END of Dynamic SQL */
  /* Main Logic, If the logic passed in the first check this will determine if there will be any error. */
- IF L0 = 0 or L1 = 0 or ARC_BACKUP = 0 or L00 = 'NO BACKUP' or L11 = 'NO BACKUP' or L11='FAILED' then /* First pass, any failures on the backup will be checked here*/
-  IF L0 = 0 or L00='NO BACKUP' THEN
+ IF L0 = 0 or L1 = 0 or ARC_BACKUP = 0 or L00 = 'NO BACKUP' or L11 = 'NO BACKUP' or L11='FAILED' or L00 = 'RUNNING' then /* First pass, any failures on the backup will be checked here*/
+  IF L0 = 0 or L00='NO BACKUP' or L00='RUNNING' THEN
    OUTPUT_MESSAGE := 'LEVEL 0';
   ELSIF (L1 = 0 or L11='NO BACKUP' or L11='FAILED') and L001 = 'NO BACKUP'  THEN
    OUTPUT_MESSAGE := 'LEVEL 1';
@@ -138,4 +139,8 @@ Also corrected the commenting of lines.
 08/31/2017 -- Rommell/MikeP -- Mike found, during the testing, that deliberate L1 backup fails. The cause is when the backup deliberately fails, the output of the script is FAILED and NO BACKUP -- Which was not capture by the logic. Added the workd FAILED in the status check of the logic. 
 09/17/2017 -- Rommell 170916-000801 - L1 backup failure alert eventhough L0 backup completed 16 hours ago, it should output NO backup failure but it output L1. 
 		Upon checking the issue is the OR in the Main logic should be AND. This is now fixed. 
+12/24/2017 -- Rommell - Remove the rule hint and replaced by CBO, my test shows less sorting on CBO than RULE.
+12/29/2017 -- Rommell/MikeP - Since the alerts has been coming in bulk on mondays(gets auto closed after some hours) added a 12 hour grace period to the threshold on L0 and L1 backup
+			  So instead of (sysdate - 1) for L1 and (sysdate - 7) for L0, I converted the days to hours so I can add the 12 hour grace period. It is now (sysdate-180/24)  for L0 and (sysdate-36/24) for L1
+ 
 */
