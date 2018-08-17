@@ -1,0 +1,53 @@
+set serveroutput on
+set linesize 300
+DECLARE
+
+/* Datafile Creation parameter values */
+maxsize_value varchar2(20);
+next_size_value varchar2(20);
+initial_size_value varchar2(20);
+storage_string varchar2(10) := ''''||'+DATA'||'''';
+encrypt_check varchar2(3);
+/* END of Datafile Creation parameter values */
+
+/* Tablespace creation/alter string storage */
+tbs_string varchar2(400);
+tbs_storage_string varchar2(100);
+df_count integer;
+encryption_string varchar2(100) := ' ENCRYPTION USING '''||'AES256'||''' DEFAULT STORAGE (ENCRYPT)';
+/* End of Tablespace creation/alter string storage */
+
+/* Cursour for capturing all user tablespace. UNDO and temp is excluded */
+CURSOR tbs_name IS
+select tablespace_name from dba_tablespaces where CONTENTS='PERMANENT';
+/* END of Cursour for capturing all user tablespace. UNDO and temp is excluded */
+
+BEGIN
+/*Initialization values */
+maxsize_value := 'UNLIMITED';
+next_size_value := '128M';
+initial_size_value := '8M';
+
+/*MAIN */
+FOR tbs_name_obj IN tbs_name
+LOOP
+ select count(*) into df_count from dba_data_files where tablespace_name=tbs_name_obj.tablespace_name;
+ select encrypted into encrypt_check from dba_tablespaces where tablespace_name=tbs_name_obj.tablespace_name;
+ IF encrypt_check = 'YES' THEN
+  tbs_string := 'CREATE TABLESPACE '||tbs_name_obj.tablespace_name|| ' DATAFILE ' ||tbs_storage_string|| encryption_string;
+ ELSE
+ tbs_string := 'CREATE TABLESPACE '||tbs_name_obj.tablespace_name|| ' DATAFILE ' ||tbs_storage_string; 
+ END IF;
+ tbs_storage_string := storage_string|| ' SIZE '|| initial_size_value ||' AUTOEXTEND ON NEXT '||next_size_value||' MAXSIZE '|| maxsize_value;
+ 
+ dbms_output.put_line('------------'||tbs_name_obj.tablespace_name||'('||df_count||')'||' Datafile Metadata. Encryption:'||encrypt_check||'------------');
+ dbms_output.put_line(tbs_string);
+ IF df_count > 1 THEN
+  FOR i IN 2..df_count LOOP
+   tbs_string := 'ALTER TABLESPACE '||tbs_name_obj.tablespace_name|| ' ADD DATAFILE ' ||tbs_storage_string||';';
+   dbms_output.put_line(tbs_string);
+  END LOOP;
+ END IF;
+END LOOP;
+END;
+
