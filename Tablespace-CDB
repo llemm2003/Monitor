@@ -1,0 +1,112 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+
+my $oratab_file='/etc/oratab';
+my @oratab_line;
+my $logfile='/home/oracle/test-file-only.log';
+
+my $sql_script='select name from v\$pdbs where name <> \'PDB\$SEED\';' ;
+
+my $sql_filters= <<'SQL_FILTER';
+set ech off
+set heading off
+set feedback off
+set header off
+set linesize 200
+col name for a10
+SQL_FILTER
+
+sub check_oratab {
+open ( my $oratab_read, '<', $oratab_file ) or die "File not found, probably not a database server";
+while (<$oratab_read>)
+{
+	if ($_ !~ m/^#|^$|ASM/) {
+		push (@oratab_line,$_);
+	}
+		
+}
+ @oratab_line
+}
+
+my $sql_tbs_script= <<'TBS';
+SELECT c.name,a.tablespace_name,sum(b.maxbytes/1048576) AS MAX_ALLOCATION,sum(b.bytes/1048576) AS CURRENT_ALLOCATION,sum(b.bytes/1048576)/sum(b.maxbytes/1048576)*100 AS PCT_USED
+FROM
+cdb_tablespaces a
+JOIN
+cdb_data_files b 
+ON 
+a.tablespace_name = b.tablespace_name
+JOIN
+v\$pdbs c ON a.con_id=c.con_id
+WHERE
+c.con_id <> 2
+AND
+c.con_id=b.con_id
+GROUP BY
+c.name,a.tablespace_name
+ORDER BY
+c.name;
+TBS
+
+
+sub dissect_string {
+ my $string_in =$_[0];
+ my $col_num =$_[1];
+ my @string_out=split(':',$string_in);
+ $string_out[$col_num];
+}
+
+sub run_sql {
+ my $run_sql_filter=$_[1];
+ #my $sql_filter=join("\n",@sql_filters),"\n";
+ my @sqlplus_output;
+ my $run_sql_script=$_[0];
+open ( my $pipe, '-|', "sqlplus / as sysdba <<GBUCS
+$run_sql_filter
+$run_sql_script
+GBUCS") or die "Can't sqlplus";
+while (<$pipe>) {
+ if ($_ !~ m/SQL|^Version|Copyright|Access and use of this|Connected to|^Oracle Database|^With|^Advanced|Access to this system|This service|^$/){
+	push (@sqlplus_output,$_);
+ }
+}
+close $pipe;
+@sqlplus_output;
+}
+
+sub form_sql {
+	my $sql_pdb_string ="alter session set container=$_[0]\;";
+	return $sql_pdb_string;
+}
+
+#MAIN
+
+my @oratab_out = &check_oratab;
+
+foreach my $i  (@oratab_out) {
+	my $output_st=dissect_string("$i",0);
+	print "CDB DETECTED => $output_st \n";
+		
+	#Set environment variable
+	$ENV{'ORAENV_ASK'}="NO";
+	$ENV{'ORACLE_HOME'}=dissect_string("$i",1);
+	$ENV{'ORACLE_SID'}=dissect_string("$i",0);
+	print "PDB DETECTED IN THE CDB: \n";
+	my @sql_output_string=&run_sql($sql_script,$sql_filters);
+	my $counter=0;
+		foreach my $j (@sql_output_string){
+		++$counter;
+		print "$counter -- $j \n";
+	}
+	
+	@sql_output_string=&run_sql($sql_tbs_script,$sql_filters);
+	foreach my $j (@sql_output_string){
+		print "$j \n";	
+	}
+}
+
+
+
+
+#10/26/2021 - ROmmell First version.
