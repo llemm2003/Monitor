@@ -53,7 +53,8 @@ TBS
 sub dissect_string {
  my $string_in =$_[0];
  my $col_num =$_[1];
- my @string_out=split(':',$string_in);
+ my $split_character=$_[2];
+ my @string_out=split($split_character,$string_in);
  $string_out[$col_num];
 }
 
@@ -85,13 +86,13 @@ sub form_sql {
 my @oratab_out = &check_oratab;
 
 foreach my $i  (@oratab_out) {
-	my $output_st=dissect_string("$i",0);
+	my $output_st=dissect_string("$i",0,':');
 	print "CDB DETECTED => $output_st \n";
 		
 	#Set environment variable
 	$ENV{'ORAENV_ASK'}="NO";
-	$ENV{'ORACLE_HOME'}=dissect_string("$i",1);
-	$ENV{'ORACLE_SID'}=dissect_string("$i",0);
+	$ENV{'ORACLE_HOME'}=dissect_string("$i",1,':');
+	$ENV{'ORACLE_SID'}=dissect_string("$i",0,':');
 	print "PDB DETECTED IN THE CDB: \n";
 	my @sql_output_string=&run_sql($sql_script,$sql_filters);
 	my $counter=0;
@@ -110,3 +111,4 @@ foreach my $i  (@oratab_out) {
 
 
 #10/26/2021 - ROmmell First version.
+#11/3/2021 - Rommell. Fixed the reuseability of dissect_string.
