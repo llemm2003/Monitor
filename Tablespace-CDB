@@ -1,114 +1,121 @@
-#!/usr/bin/perl
-use strict;
-use warnings;
 
-my $oratab_file='/etc/oratab';
-my @oratab_line;
-my $logfile='/home/oracle/test-file-only.log';
+set serveroutput on
+set linesize 300
+DECLARE
+/*Variable declaration part */
+add_string varchar2(200);
+stg_tbs dba_tablespaces.tablespace_name%type;
+count_checker number(2);
+count_x number(2);
+db_files varchar2(10);
+df_count number(10);
+add_df_space_string varchar2(200);
+storage_string varchar2(10) := ''''||'+DATA'||'''';
+next_size varchar2(5) := '8M';
+time_x timestamp;
+threshold_val number(2) := 69;
+df_not_autoextend number(3);
+df_id dba_data_files.file_id%type;
+bigfile number(3);
 
-my $sql_script='select name from v\$pdbs where name <> \'PDB\$SEED\';' ;
+BEGIN
+/*MAIN START*/
 
-my $sql_filters= <<'SQL_FILTER';
-set ech off
-set heading off
-set feedback off
-set header off
-set linesize 200
-col name for a10
-SQL_FILTER
+/*This script will add datafiles to tablespaces that needs more space and below threshold. But will need to make sure that the tablespace must be:
+1. Small file
+2. all tablespace is autoextensible and maxsize is unlimited(small or bigfile). 
 
-sub check_oratab {
-open ( my $oratab_read, '<', $oratab_file ) or die "File not found, probably not a database server";
-while (<$oratab_read>)
-{
-	if ($_ !~ m/^#|^$|ASM/) {
-		push (@oratab_line,$_);
-	}
-		
-}
- @oratab_line
-}
+The script will check first for any datafile not set to autoextend*
+It will put all datafiles to autoextend if one datafile is not autoextend and maxsize unlimited;
+If tablespaces are bigfile** -- The script will exit*** 
 
-my $sql_tbs_script= <<'TBS';
-SELECT c.name,a.tablespace_name,sum(b.maxbytes/1048576) AS MAX_ALLOCATION,sum(b.bytes/1048576) AS CURRENT_ALLOCATION,sum(b.bytes/1048576)/sum(b.maxbytes/1048576)*100 AS PCT_USED
-FROM
-cdb_tablespaces a
-JOIN
-cdb_data_files b 
-ON 
-a.tablespace_name = b.tablespace_name
-JOIN
-v\$pdbs c ON a.con_id=c.con_id
-WHERE
-c.con_id <> 2
-AND
-c.con_id=b.con_id
-GROUP BY
-c.name,a.tablespace_name
-ORDER BY
-c.name;
-TBS
+*/
 
+/*Check the db important db parameter db_file if it can handle another datafile*/
+select value into db_files from v$parameter where name='db_files';
+select count(*) into df_count from dba_data_files;
+count_checker := 0;
+count_x := 0;
 
-sub dissect_string {
- my $string_in =$_[0];
- my $col_num =$_[1];
- my $split_character=$_[2];
- my @string_out=split($split_character,$string_in);
- $string_out[$col_num];
-}
-
-sub run_sql {
- my $run_sql_filter=$_[1];
- #my $sql_filter=join("\n",@sql_filters),"\n";
- my @sqlplus_output;
- my $run_sql_script=$_[0];
-open ( my $pipe, '-|', "sqlplus / as sysdba <<GBUCS
-$run_sql_filter
-$run_sql_script
-GBUCS") or die "Can't sqlplus";
-while (<$pipe>) {
- if ($_ !~ m/SQL|^Version|Copyright|Access and use of this|Connected to|^Oracle Database|^With|^Advanced|Access to this system|This service|^$/){
-	push (@sqlplus_output,$_);
- }
-}
-close $pipe;
-@sqlplus_output;
-}
-
-sub form_sql {
-	my $sql_pdb_string ="alter session set container=$_[0]\;";
-	return $sql_pdb_string;
-}
-
-#MAIN
-
-my @oratab_out = &check_oratab;
-
-foreach my $i  (@oratab_out) {
-	my $output_st=dissect_string("$i",0,':');
-	print "CDB DETECTED => $output_st \n";
-		
-	#Set environment variable
-	$ENV{'ORAENV_ASK'}="NO";
-	$ENV{'ORACLE_HOME'}=dissect_string("$i",1,':');
-	$ENV{'ORACLE_SID'}=dissect_string("$i",0,':');
-	print "PDB DETECTED IN THE CDB: \n";
-	my @sql_output_string=&run_sql($sql_script,$sql_filters);
-	my $counter=0;
-		foreach my $j (@sql_output_string){
-		++$counter;
-		print "$counter -- $j \n";
-	}
-	
-	@sql_output_string=&run_sql($sql_tbs_script,$sql_filters);
-	foreach my $j (@sql_output_string){
-		print "$j \n";	
-	}
-}
-
-
-
-
-#10/26/2021 - ROmmell First version.
-#11/3/2021 - Rommell. Fixed the reuseability of dissect_string.
+ BEGIN 
+  select count(*) into df_not_autoextend from dba_data_files where AUTOEXTENSIBLE='NO';
+  select count(*) into bigfile from dba_tablespaces where bigfile='YES';
+  EXCEPTION
+   WHEN NO_DATA_FOUND THEN 
+    dbms_output.put_line('ALL datafiles are autoextensible.');
+  END;	
+  dbms_output.put_line('Number of DF not autoextend: '||df_not_autoextend);
+  dbms_output.put_line('Number of BIGFILE: '||bigfile);
+  
+  IF df_not_autoextend > 0 THEN
+   FOR df_id IN (select file_id from dba_data_files where autoextensible='NO')
+   LOOP
+    dbms_output.put_line('ALTER DATABASE DATAFILE '||df_id.file_id||' autoextend on next 128M maxsize unlimited');
+	execute immediate('ALTER DATABASE DATAFILE '||df_id.file_id||' autoextend on next 128M maxsize unlimited');
+   END LOOP;
+  END IF;
+  
+  IF bigfile > 0 THEN
+   FOR df_id IN (select file_id from dba_data_files where tablespace_name IN (select tablespace_name from dba_tablespaces where bigfile='YES'))
+   LOOP
+    dbms_output.put_line('ALTER DATABASE DATAFILE '||df_id.file_id||' autoextend on next 128M maxsize unlimited');
+	execute immediate('ALTER DATABASE DATAFILE '||df_id.file_id||' autoextend on next 128M maxsize unlimited');
+   END LOOP;
+  END IF;
+ 
+ BEGIN
+  select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+  EXCEPTION
+   WHEN NO_DATA_FOUND THEN 
+   dbms_output.put_line('No tablespace above threshold.');
+ END;
+ 
+LOOP 
+ select sysdate into time_x from dual;
+ dbms_output.put_line(time_x);
+ EXIT WHEN count_checker = 0;
+ 
+ BEGIN
+  select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+  EXCEPTION
+   WHEN NO_DATA_FOUND THEN 
+   dbms_output.put_line('No tablespace above threshold.');
+   EXIT;
+ END;
+ 
+ dbms_output.put_line('Tablespace count found: '||count_checker);
+ 
+ BEGIN
+ select TBS_NAME into stg_tbs from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val and rownum=1;
+   EXCEPTION
+   WHEN NO_DATA_FOUND THEN 
+   dbms_output.put_line('No tablespace above threshold.');
+ END;
+ 
+ dbms_output.put_line('Tablespace name-found: '||stg_tbs);
+ IF count_checker > 0 THEN
+ dbms_output.put_line('Adding 1 datafile to: '||stg_tbs);
+  add_df_space_string := 'alter tablespace '||stg_tbs||' add datafile ' || storage_string ||' size 8m autoextend on next '||next_size||'  maxsize unlimited';
+  dbms_output.put_line(add_df_space_string);
+  execute immediate(add_df_space_string);
+  count_checker := 0;
+ END IF;
+ 
+ BEGIN
+  select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+  EXCEPTION
+   WHEN NO_DATA_FOUND THEN 
+   dbms_output.put_line('No tablespace above threshold.');
+ END;
+ 
+ 
+ BEGIN
+  count_x := count_x + 1;
+  EXCEPTION
+   WHEN OTHERS THEN
+   dbms_output.put_line('Error received:' ||sqlerrm);
+  EXIT;
+ END;
+ dbms_output.put_line('counter: ' ||count_x);
+END LOOP;
+END;
