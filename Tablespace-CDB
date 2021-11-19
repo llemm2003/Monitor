@@ -39,7 +39,7 @@ count_x := 0;
 
  BEGIN 
   select count(*) into df_not_autoextend from dba_data_files where AUTOEXTENSIBLE='NO';
-  select count(*) into bigfile from dba_tablespaces where bigfile='YES';
+  select count(*) into  bigfile from dba_tablespaces a join dba_data_files b on a.tablespace_name=b.tablespace_name where bigfile='YES' and AUTOEXTENSIBLE='NO';
   EXCEPTION
    WHEN NO_DATA_FOUND THEN 
     dbms_output.put_line('ALL datafiles are autoextensible.');
