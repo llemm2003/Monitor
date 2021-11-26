@@ -17,6 +17,10 @@ threshold_val number(2) := 69;
 df_not_autoextend number(3);
 df_id dba_data_files.file_id%type;
 bigfile number(3);
+df_init_size number(7);
+df_block_size number(5);
+df_min_extenlen number(5);
+
 
 BEGIN
 /*MAIN START*/
@@ -27,7 +31,7 @@ BEGIN
 
 The script will check first for any datafile not set to autoextend*
 It will put all datafiles to autoextend if one datafile is not autoextend and maxsize unlimited;
-If tablespaces are bigfile** -- The script will exit*** 
+If tablespaces are bigfile** -- The script will exit*** (Fixed already). It will fix bigfile tablespace by setting the autoextend and NEXT segment. 
 
 */
 
@@ -95,7 +99,10 @@ LOOP
  dbms_output.put_line('Tablespace name-found: '||stg_tbs);
  IF count_checker > 0 THEN
  dbms_output.put_line('Adding 1 datafile to: '||stg_tbs);
-  add_df_space_string := 'alter tablespace '||stg_tbs||' add datafile ' || storage_string ||' size 8m autoextend on next '||next_size||'  maxsize unlimited';
+  /* minimum extent size is 64KB+(blocksize *3) */
+  select (block_size*3)+MIN_EXTLEN into df_init_size from dba_tablespaces where tablespace_name=stg_tbs;
+  dbms_output.put_line('Extent size: '||df_init_size);
+  add_df_space_string := 'alter tablespace '||stg_tbs||' add datafile ' || storage_string ||' size '||df_init_size||' autoextend on next '||next_size||'  maxsize unlimited';
   dbms_output.put_line(add_df_space_string);
   execute immediate(add_df_space_string);
   count_checker := 0;
