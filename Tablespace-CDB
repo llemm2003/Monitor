@@ -20,6 +20,10 @@ bigfile number(3);
 df_init_size number(7);
 df_block_size number(5);
 df_min_extenlen number(5);
+disk_storage v$parameter.value%type;
+maxbytes_val dba_data_files.maxbytes%type;
+block_size_max_compute varchar2(20);
+block_size_count_clearance number(1) := 4;
 
 
 BEGIN
@@ -32,18 +36,20 @@ BEGIN
 The script will check first for any datafile not set to autoextend*
 It will put all datafiles to autoextend if one datafile is not autoextend and maxsize unlimited;
 If tablespaces are bigfile** -- The script will exit*** (Fixed already). It will fix bigfile tablespace by setting the autoextend and NEXT segment. 
-
+It will look for bigfile tablespace that are not autoextend or the datafiles whose maxbytes are not in its theoretical maxsize or (2^32)-1*block_size. 
 */
 
 /*Check the db important db parameter db_file if it can handle another datafile*/
 select value into db_files from v$parameter where name='db_files';
+select value into disk_storage from v$parameter where name='db_create_file_dest';
 select count(*) into df_count from dba_data_files;
 count_checker := 0;
 count_x := 0;
 
  BEGIN 
   select count(*) into df_not_autoextend from dba_data_files where AUTOEXTENSIBLE='NO';
-  select count(*) into  bigfile from dba_tablespaces a join dba_data_files b on a.tablespace_name=b.tablespace_name where bigfile='YES' and AUTOEXTENSIBLE='NO';
+  --select count(*) into  bigfile from dba_tablespaces a join dba_data_files b on a.tablespace_name=b.tablespace_name where bigfile='YES' and AUTOEXTENSIBLE='NO';
+  select count(*) into  bigfile from dba_tablespaces a join dba_data_files b on a.tablespace_name=b.tablespace_name where (a.bigfile='YES' and b.maxbytes <= (power(2,32)-block_size_count_clearance)*a.block_size) or (a.bigfile='YES' and b.autoextensible='NO');
   EXCEPTION
    WHEN NO_DATA_FOUND THEN 
     dbms_output.put_line('ALL datafiles are autoextensible.');
@@ -52,14 +58,16 @@ count_x := 0;
   dbms_output.put_line('Number of BIGFILE: '||bigfile);
   
   IF df_not_autoextend > 0 THEN
+   dbms_output.put_line('Extending any datafile that is not autoextend...');
    FOR df_id IN (select file_id from dba_data_files where autoextensible='NO')
-   LOOP
+   LOOP 
     dbms_output.put_line('ALTER DATABASE DATAFILE '||df_id.file_id||' autoextend on next 128M maxsize unlimited');
 	execute immediate('ALTER DATABASE DATAFILE '||df_id.file_id||' autoextend on next 128M maxsize unlimited');
-   END LOOP;
+   END LOOP; 
   END IF;
   
   IF bigfile > 0 THEN
+	dbms_output.put_line('BIGFILE CHECK');
    FOR df_id IN (select file_id from dba_data_files where tablespace_name IN (select tablespace_name from dba_tablespaces where bigfile='YES'))
    LOOP
     dbms_output.put_line('ALTER DATABASE DATAFILE '||df_id.file_id||' autoextend on next 128M maxsize unlimited');
@@ -71,7 +79,9 @@ count_x := 0;
   select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
   EXCEPTION
    WHEN NO_DATA_FOUND THEN 
-   dbms_output.put_line('No tablespace above threshold.');
+    dbms_output.put_line('No tablespace above threshold.');
+   WHEN ZERO_DIVIDE THEN 
+    dbms_output.put_line('A datafile(s) is still not autoextend, additional investigation needed.');
  END;
  
 LOOP 
@@ -102,7 +112,7 @@ LOOP
   /* minimum extent size is 64KB+(blocksize *3) */
   select (block_size*3)+MIN_EXTLEN into df_init_size from dba_tablespaces where tablespace_name=stg_tbs;
   dbms_output.put_line('Extent size: '||df_init_size);
-  add_df_space_string := 'alter tablespace '||stg_tbs||' add datafile ' || storage_string ||' size '||df_init_size||' autoextend on next '||next_size||'  maxsize unlimited';
+  add_df_space_string := 'alter tablespace '||stg_tbs||' add datafile ''' || disk_storage ||''' size '||df_init_size||' autoextend on next '||next_size||'  maxsize unlimited';
   dbms_output.put_line(add_df_space_string);
   execute immediate(add_df_space_string);
   count_checker := 0;
