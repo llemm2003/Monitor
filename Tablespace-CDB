@@ -1,4 +1,3 @@
-
 set serveroutput on
 set linesize 300
 DECLARE
@@ -24,7 +23,7 @@ disk_storage v$parameter.value%type;
 maxbytes_val dba_data_files.maxbytes%type;
 block_size_max_compute varchar2(20);
 block_size_count_clearance number(1) := 4;
-
+tbs_contents dba_tablespaces.contents%type;
 
 BEGIN
 /*MAIN START*/
@@ -76,12 +75,18 @@ count_x := 0;
   END IF;
  
  BEGIN
-  select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+  --select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+  select count(*) into count_checker from (
+ select * from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name)
+ where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val
+ union
+ select * from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_temp_files group by tablespace_name)
+ where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val);
   EXCEPTION
    WHEN NO_DATA_FOUND THEN 
     dbms_output.put_line('No tablespace above threshold.');
    WHEN ZERO_DIVIDE THEN 
-    dbms_output.put_line('A datafile(s) is still not autoextend, additional investigation needed.');
+    dbms_output.put_line('A data or tempfile(s) is still not autoextend, additional investigation needed.');
  END;
  
 LOOP 
@@ -90,7 +95,13 @@ LOOP
  EXIT WHEN count_checker = 0;
  
  BEGIN
-  select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+  --select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+ select count(*) into count_checker from (
+ select * from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name)
+ where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val
+ union
+ select * from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_temp_files group by tablespace_name)
+ where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val);
   EXCEPTION
    WHEN NO_DATA_FOUND THEN 
    dbms_output.put_line('No tablespace above threshold.');
@@ -100,7 +111,11 @@ LOOP
  dbms_output.put_line('Tablespace count found: '||count_checker);
  
  BEGIN
- select TBS_NAME into stg_tbs from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val and rownum=1;
+ --select TBS_NAME into stg_tbs from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val and rownum=1;
+ select TBS_NAME into stg_tbs from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name
+ union
+ select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_temp_files group by tablespace_name) 
+ where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val and rownum=1;
    EXCEPTION
    WHEN NO_DATA_FOUND THEN 
    dbms_output.put_line('No tablespace above threshold.');
@@ -110,22 +125,36 @@ LOOP
  IF count_checker > 0 THEN
  dbms_output.put_line('Adding 1 datafile to: '||stg_tbs);
   /* minimum extent size is 64KB+(blocksize *3) */
-  select (block_size*3)+MIN_EXTLEN into df_init_size from dba_tablespaces where tablespace_name=stg_tbs;
+  --select (block_size*3)+MIN_EXTLEN into df_init_size from dba_tablespaces where tablespace_name=stg_tbs;
+  SELECT (block_size*3)+MIN_EXTLEN,  
+  CASE contents 
+  WHEN 'TEMPORARY' THEN 'TEMP'
+  WHEN 'PERMANENT' THEN 'DATA'
+  ELSE 'UNDO' END
+  INTO df_init_size,tbs_contents
+  FROM dba_tablespaces where tablespace_name=stg_tbs;
+  
   dbms_output.put_line('Extent size: '||df_init_size);
-  add_df_space_string := 'alter tablespace '||stg_tbs||' add datafile ''' || disk_storage ||''' size '||df_init_size||' autoextend on next '||next_size||'  maxsize unlimited';
+  add_df_space_string := 'alter tablespace '||stg_tbs||' add '|| tbs_contents ||'file ''' || disk_storage ||''' size '||df_init_size||' autoextend on next '||next_size||'  maxsize unlimited';
   dbms_output.put_line(add_df_space_string);
   execute immediate(add_df_space_string);
   count_checker := 0;
  END IF;
  
  BEGIN
-  select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+  --select count(*) into count_checker from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name) where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val;
+  select count(*) into count_checker from (
+  select * from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_data_files group by tablespace_name)
+  where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val
+  union
+  select * from (select tablespace_name TBS_NAME, sum(bytes/1048576) As CurrentUsage, sum(maxbytes/1048576) AS MAXIMUM_ALLOCATION  from dba_temp_files group by tablespace_name)
+  where CurrentUsage/MAXIMUM_ALLOCATION*100 > threshold_val);
+ 
   EXCEPTION
    WHEN NO_DATA_FOUND THEN 
    dbms_output.put_line('No tablespace above threshold.');
  END;
- 
- 
+  
  BEGIN
   count_x := count_x + 1;
   EXCEPTION
